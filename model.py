@@ -1,73 +1,111 @@
 import numpy as np
 from PIL import Image
 import os
+from numba import jit
 
 
-def load_data(width=300, height=300, num=198):
-    cur_dir = os.getcwd() + "\\cats-combined\\"
-    cur_dir2 = os.getcwd() + "\\other\\"
-    arr = np.empty(shape=(num, 300, 300, 3))
-    for i in range(num//2):
+def load_validation(normalization=False):
+    cur_dir = os.getcwd() + "\\data\\cats-validation\\"
+    cur_dir2 = os.getcwd() + "\\data\\other-validation\\"
+    num = 1024
+    cur_pos = 0
+    arr = np.empty(shape=(num, 128, 128, 3))
+    for i in range(num // 2):
         img: Image.Image = Image.open(cur_dir + str(i) + ".jpg", "r")
-        arr[i] = np.array(img)
+        img = img.resize((128, 128))
+        arr[i] = np.array(img, dtype="float32")
+
+        if normalization:
+            arr[i] = arr[i] / 255
+            mean = arr[i].mean(axis=(0, 1), dtype="float64")
+            std = arr[i].std(axis=(0, 1), dtype='float64')
+            arr[i] = (arr[i] - mean) / std
+
         img.close()
-    for i in range(num//2, num):
-        img: Image.Image = Image.open(cur_dir2 + str(i-num//2) + ".jpg", "r")
-        arr[i] = np.array(img)
-        img.close()
-    nums = set()
-    test_X = np.empty(shape=(20, 300, 300, 3))
-    for i in range(10):
-        numy = np.random.randint(100, 200)
-        while numy in nums:
-            numy = np.random.randint(100, 2000)
-        nums.add(numy)
-        img: Image.Image = Image.open(cur_dir + str(num) + ".jpg", "r")
-        test_X[i] = np.array(img)
-        img.close()
-    nums = set()
-    for i in range(10, 20):
-        numy = np.random.randint(100, 200)
-        while numy in nums:
-            numy = np.random.randint(100, 2000)
-        nums.add(numy)
+    cur_pos -= num // 2
+    for i in range(num // 2):
         img: Image.Image = Image.open(cur_dir2 + str(i) + ".jpg", "r")
-        test_X[i] = np.array(img)
+        img = img.resize((128, 128))
+        arr[num // 2 + i] = np.array(img, dtype="float32")
+
+        if normalization:
+            arr[num // 2 + i] = arr[num // 2 + i] / 255
+            mean = arr[num // 2 + i].mean(axis=(0, 1), dtype="float64")
+            std = arr[num // 2 + i].std(axis=(0, 1), dtype='float64')
+            arr[num // 2 + i] = (arr[num // 2 + i] - mean) / std
+
         img.close()
-    X = arr.reshape(arr.shape[0], -1).T
-    test_X = test_X.reshape(test_X.shape[0], -1).T
     Y = np.ones(shape=(1, num))
-    test_Y = np.ones(shape=(1, 20))
-    Y[0, num//2:] = 0
-    # print(Y)
-    test_Y[0, 10:] = 0
-    return X, Y, test_X, test_Y
+    Y[0, num // 2:] = 0
+    arr = arr.reshape(arr.shape[0], -1).T
+
+    return arr, Y
 
 
+def load_minibatches(num=128, normalization=False):
+    cur_dir = os.getcwd() + "\\data\\cats-small\\"
+    cur_dir2 = os.getcwd() + "\\data\\other-small\\"
+    minibsX = []
+    minibsY = []
+    cur_pos = 0
+
+    for i in range(70):
+        arr = np.empty(shape=(num, 128, 128, 3))
+        for i in range(num//2):
+            img: Image.Image = Image.open(cur_dir + str(cur_pos) + ".jpg", "r")
+            arr[i] = np.array(img, dtype="float32")
+
+            if normalization:
+                arr[i] = arr[i]/255
+                mean = arr[i].mean(axis=(0, 1), dtype="float64")
+                std = arr[i].std(axis=(0, 1), dtype='float64')
+                arr[i] = (arr[i] - mean)/std
+            img.close()
+            cur_pos += 1
+        cur_pos -= num//2
+        for i in range(num//2):
+            img: Image.Image = Image.open(cur_dir2 + str(cur_pos) + ".jpg", "r")
+            arr[num//2+i] = np.array(img, dtype="float32")
+
+            if normalization:
+                arr[num//2+i] = arr[num//2+i]/255
+                mean = arr[num//2+i].mean(axis=(0, 1), dtype="float64")
+                std = arr[num//2+i].std(axis=(0, 1), dtype='float64')
+                arr[num//2+i] = (arr[num//2+i] - mean)/std
+
+            img.close()
+            cur_pos += 1
+
+        Y = np.ones(shape=(1, num))
+        Y[0, num//2:] = 0
+        arr = arr.reshape(arr.shape[0], -1).T
+        minibsX.append(arr)
+        minibsY.append(Y)
+
+    return minibsX, minibsY
+
+
+@jit(nopython=True)
 def sigmoid(Z):
     cache = Z
-    # print("Z", Z)
-    # input()
     return 1/(1+np.exp(-Z)), cache
 
 
+@jit(nopython=True)
 def sigmoid_backward(dA, Z):
     s, cache = sigmoid(Z)
-    # print("sigmoid backward", s)
     return dA*s*(1-s)
 
 
+@jit(nopython=True)
 def relu(Z):
     cache = Z
     return np.maximum(0, Z), cache
 
 
 def relu_backward(dA, Z):
-    dZ = np.array(dA, copy=True)
-    # print(dA.shape)
-    # print(dZ.shape)
-    dZ[Z <= 0] = 0
-    return dZ
+    dA[Z <= 0] = 0
+    return dA
 
 
 def param_init_he(layers_dims):
@@ -80,6 +118,7 @@ def param_init_he(layers_dims):
     return params
 
 
+@jit(nopython=True)
 def linear_forward(A_prev, W, b):
     Z = np.dot(W, A_prev) + b
     cache = (A_prev, W, b)
@@ -109,60 +148,62 @@ def forward_prop(X, params):
     return AL, caches
 
 
-def compute_cost(AL, Y):
+def compute_cost(AL, Y, params, lmbda, lay_num):
     m = Y.shape[1]
     cost = (np.dot(Y, np.log(AL.T))+np.dot((1-Y), np.log((1-AL).T)))/(-m)
+
+    # calculating regularization term
+    regularization = 0
+    for i in range(1, lay_num):
+        regularization += np.sum(np.square(params["W"+str(i)]))
+    regularization *= lmbda/(2*m)
+
+    cost = cost + regularization
     cost = np.squeeze(cost)
     return cost
 
 
-def linear_backward(dZ, cache):
+def linear_backward(dZ, cache, lmbda):
     A_prev, W, b = cache
     m = A_prev.shape[1]
 
-    # print("dZ, linear backward", dZ)
-    dW = np.dot(dZ, A_prev.T)/m
+    # dW with respect to regualrization
+    dW = np.dot(dZ, A_prev.T)/m + lmbda/m*W
     db = np.sum(dZ, axis=1, keepdims=True)/m
     dA_prev = np.dot(W.T, dZ)
-
 
     return dA_prev, dW, db
 
 
-def linear_activations_backward(dA, caches, activation):
+def linear_activations_backward(dA, caches, activation, lmbda):
     linear_cache, activation_cache = caches
-
-    # print("dA linear activations backward", dA)
 
     if activation == "sigmoid":
         dZ = sigmoid_backward(dA, activation_cache)
     elif activation == "relu":
         dZ = relu_backward(dA, activation_cache)
-    # print("dZ linear activations backward", dZ)
-    dA_prev, dW, db = linear_backward(dZ, linear_cache)
+
+    dA_prev, dW, db = linear_backward(dZ, linear_cache, lmbda)
 
     return dA_prev, dW, db
 
 
-def backward_prop(AL, Y, caches):
+def backward_prop(AL, Y, caches, lmbda):
     grads = {}
     L = len(caches) - 1
     m = AL.shape[1]
     Y = Y.reshape(AL.shape)
 
     dAL = - (np.divide(Y, AL) - np.divide(1 - Y, 1 - AL))
-    # print("dalszap backward prop", dAL.shape)
     cur_caches = caches[L]
-    dA_prev, dW, db = linear_activations_backward(dAL, cur_caches, 'sigmoid')
-    # print(dA_prev.shape)
+    dA_prev, dW, db = linear_activations_backward(dAL, cur_caches, 'sigmoid', lmbda)
     grads["dA" + str(L)] = dA_prev
     grads["dW" + str(L + 1)] = dW
     grads["db" + str(L + 1)] = db
 
     for l in range(L-1, -1, -1):
         cur_caches = caches[l]
-        # print(grads["dA" + str(l + 1)].shape)
-        dA_prev, dW, db = linear_activations_backward(grads["dA" + str(l + 1)], cur_caches, 'relu')
+        dA_prev, dW, db = linear_activations_backward(grads["dA" + str(l + 1)], cur_caches, 'relu', lmbda)
         grads["dA" + str(l)] = dA_prev
         grads["dW" + str(l + 1)] = dW
         grads["db" + str(l + 1)] = db
@@ -177,12 +218,10 @@ def update_params(params, grads, learning_rate):
         params["W" + str(l + 1)] = params["W" + str(l + 1)] - learning_rate * grads["dW" + str(l + 1)]
         params["b" + str(l + 1)] = params["b" + str(l + 1)] - learning_rate * grads["db" + str(l + 1)]
 
-    # print("params", params)
-    # input()
     return params
 
 
-def teach_the_model(X, Y, layers_dims, learning_rate, iterations):
+def teach_the_model(X, Y, layers_dims, learning_rate, iterations, lmbda):
     costs = []
 
     params = param_init_he(layers_dims)
@@ -190,17 +229,16 @@ def teach_the_model(X, Y, layers_dims, learning_rate, iterations):
     for i in range(iterations):
         # forward propagation
         AL, caches = forward_prop(X, params)
-        # print("AL, params", AL, params)
 
         # compute cost for making a graph
         if i % 2 == 0:
             print("Iteration:", i)
-            cost = compute_cost(AL, Y)
+            cost = compute_cost(AL, Y, lmbda)
             print(cost)
             costs.append(cost)
 
         # backward propagation
-        grads = backward_prop(AL, Y, caches)
+        grads = backward_prop(AL, Y, caches, lmbda)
 
         # param update
         params = update_params(params, grads, learning_rate)
@@ -212,20 +250,27 @@ def make_predictions(X, Y, params):
     m = X.shape[1]
     predicts, _ = forward_prop(X, params)
     predicts = predicts > 0.5
+    predicts2 = np.array(predicts, copy=True)
+    predicts3 = np.array(predicts, copy=True)
+    predicts2[Y < 1] = 0
+    predicts3[Y == 1] = 0
+    print("{}% of non-cats labeled correctly.".format((m/2 - np.sum(predicts3))/(m/2)*100))
+    print("{}% of cats were labeled correctly.".format(np.sum(predicts2)/(m/2)*100))
     print(predicts.shape, X.shape, Y.shape)
     print("Accuracy of the model: ", np.sum((predicts == Y))/m)
     return predicts
 
 
 def shuffle(a, b):
-    rng_state = np.random.get_state()
-    a = a.T
-    np.random.shuffle(a)
-    a = a.T
-    np.random.set_state(rng_state)
-    b = b.T
-    np.random.shuffle(b)
-    b = b.T
+    for i in range(len(a)):
+        rng_state = np.random.get_state()
+        a[i] = a[i].T
+        np.random.shuffle(a[i])
+        a[i] = a[i].T
+        np.random.set_state(rng_state)
+        b[i] = b[i].T
+        np.random.shuffle(b[i])
+        b[i] = b[i].T
     return a, b
 
 
@@ -233,10 +278,10 @@ def make_single_prediction():
     file = input("Put your image in the current directory and specify its name (with extension): ")
     directory = os.path.join(os.getcwd(), file)
     img: Image.Image = Image.open(directory, "r")
-    img = img.resize((300, 300)).convert("RGB")
-    arr = np.array(img)
-    arr.resize((270000, 1))
-    params = np.load(os.path.join(os.getcwd(), "params\\params.npy"), allow_pickle=True)
+    img = img.resize((128, 128)).convert("RGB")
+    arr = np.array(img, dtype="float64")
+    arr.resize((49152, 1))
+    params = np.load(os.path.join(os.getcwd(), "params\\params_current.npy"), allow_pickle=True)
     params = params.item()
     predict, _ = forward_prop(arr, params)
     predict = np.squeeze(predict)
@@ -246,12 +291,55 @@ def make_single_prediction():
         print("Prediction: There isn't a cat in the picture")
 
 
+def process_minibatches(miniX, miniY, layers_dims, learning_rate, epochs, lmbda, new_params=True):
+    if new_params:
+        params = param_init_he(layers_dims)
+    else:
+        params = np.load(os.path.join(os.getcwd(), "params\\4_4_4_1\\small_reg\\params17.npy"), allow_pickle=True)
+        params = params.item()
+    counter = 1
+    cost = 0
+
+    for i in range(1, epochs + 1):
+        for j, minX in enumerate(miniX):
+
+            # forward propagation
+            AL, caches = forward_prop(minX, params)
+
+            # compute cost for making a graph
+            if j % 20 == 0:
+                print("Iteration:", j, "Epoch:", i)
+                cost = compute_cost(AL, miniY[j], params, lmbda, len(layers_dims))
+                print(cost)
+
+            # backward propagation
+            grads = backward_prop(AL, miniY[j], caches, lmbda)
+
+            # param update
+            params = update_params(params, grads, learning_rate)
+
+            if i % 50 == 0 and j == 49:
+                np.save("params\\4_4_4_1\\small_reg\\params" + str(counter) + ".npy", params)
+                file = open("D:\\catrecognizer\\params\\4_4_4_1\\small_reg\\cost" + str(counter) + ".txt", "w")
+                file.write(str(cost))
+                file.close()
+                counter += 1
+
+    return params
+
+
 if __name__ == "__main__":
-    X, Y, test_X, test_Y = load_data()
-    X, Y = shuffle(X, Y)
-    layers_dims = [X.shape[0], 8, 4, 1]
-    params = teach_the_model(X, Y, layers_dims, 0.00008, 3000)
-    if not os.path.exists(os.path.join(os.getcwd(), "params")):
-        os.makedirs("params")
-    np.save("params/params.npy", params)
-    make_predictions(test_X, test_Y, params)
+    # minibsX, minibsY = load_minibatches(normalization=False)
+    # minibsX, minibsY = shuffle(minibsX, minibsY)
+    # layers_dims = [minibsX[0].shape[0], 4, 4, 4, 1]
+    # params = process_minibatches(minibsX, minibsY, layers_dims, 0.0001, 1000, lmbda=0.0001, new_params=False)
+
+    # if not os.path.exists(os.path.join(os.getcwd(), "params")):
+    #     os.makedirs("params")
+    # np.save("params/params2.npy", params)
+
+    # validation run
+    X, Y = load_validation(normalization=False)
+    params = np.load(os.path.join(os.getcwd(), "params\\4_4_4_1\\small\\params_base3.npy"), allow_pickle=True)
+    params = params.item()
+    make_predictions(X, Y, params)
